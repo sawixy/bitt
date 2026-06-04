@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["full"] }
+egui = "0.27"
+eframe = "0.27"
+epaint = "0.27"
