@@ -1,3 +1,3 @@
-pub mod sender;
-pub mod receiver;
 pub mod bencode;
+pub mod file;
+pub mod request;

@@ -33,11 +33,17 @@ impl Entry {
             _ => None,
         }
     }
+    pub fn as_dict_mut(&mut self) -> Option<&mut HashMap<String, Entry>> {
+        match self {
+            Entry::Dict(dict) => Option::from(dict),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Bencode {
-    value: Entry,
+    pub value: Entry,
 }
 
 impl Bencode {
@@ -195,13 +201,5 @@ impl Bencode {
 
     pub fn format(&self) -> Vec<u8> {
         Self::format_block(self.value.clone())
-    }
-
-    pub fn get(&self, key: &str) -> Option<Entry> {
-        let dict = self.value.as_dict()?;
-        match dict.get(key) {
-            Some(entry) => Some(entry.clone()),
-            _ => None,
-        }
     }
 }
