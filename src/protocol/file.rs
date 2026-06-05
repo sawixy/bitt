@@ -1,171 +1,50 @@
-use std::collections::HashMap;
-use tokio::fs;
-
-#[derive(Clone, Debug)]
-pub enum Entry {
-    String(Vec<u8>),
-    Integer(i64),
-    List(Vec<Entry>),
-    Dict(HashMap<String, Entry>)
+pub struct TorrentFile {
+    pub announce: String,
+    pub anounce_list: Vec<String>,
+    pub comment: String,
+    pub created_by: String,
+    pub creation_date: i64,
+    pub piece_length: i64,
+    pub pieces: Vec<u8>,
 }
 
-impl Entry {
-    pub fn as_string(&self) -> Option<Vec<u8>> {
-        match self {
-            Entry::String(str) => Option::from(str.clone()),
-            _ => None,
-        }
-    }
-    pub fn as_int(&self) -> Option<i64> {
-        match self {
-            Entry::Integer(int) => Option::from(*int),
-            _ => None,
-        }
-    }
-    pub fn as_list(&self) -> Option<Vec<Entry>> {
-        match self {
-            Entry::List(list) => Option::from(list.clone()),
-            _ => None,
-        }
-    }
-    pub fn as_dict(&self) -> Option<HashMap<String, Entry>> {
-        match self {
-            Entry::Dict(dict) => Option::from(dict.clone()),
-            _ => None,
-        }
-    }
-}
+impl TorrentFile {
+    pub fn from_bencode(bencode: &Bencode) -> Option<Self> {
+        let announce = bencode.get("announce")?.as_string()?;
+        let anounce_list = bencode.get("announce-list")?.as_list()?;
+        let comment = bencode.get("comment")?.as_string()?;
+        let created_by = bencode.get("created by")?.as_string()?;
+        let creation_date = bencode.get("creation date")?.as_integer()?;
+        let piece_length = bencode.get("info")?.as_dict()?.get("piece length")?.as_integer()?;
+        let pieces = bencode.get("info")?.as_dict()?.get("pieces")?.as_string()?;
 
-#[derive(Debug, Clone)]
-pub struct File {
-    value: Entry,
-}
-
-impl File {
-    pub fn new() -> Self {
-        Self {
-            value: Entry::Dict(HashMap::new())
-        }
+        Some(Self {
+            announce: String::from_utf8(announce).ok()?,
+            anounce_list: anounce_list.iter().filter_map(|entry| entry.as_string().and_then(|s| String::from_utf8(s).ok())).collect(),
+            comment: String::from_utf8(comment).ok()?,
+            created_by: String::from_utf8(created_by).ok()?,
+            creation_date,
+            piece_length,
+            pieces,
+        })
     }
 
-    fn parse(block: &[u8], pos: &mut usize) -> Result<Entry, Box<dyn std::error::Error>> {
-        if *pos >= block.len() {
-            return Err(Box::from("Unexpected end of data"));
-        }
-        
-        if block[*pos] == b'i' {
-            *pos += 1;
-            let start = *pos;
-            let mut len: usize = 0;
-            
-            while *pos + len < block.len() && block[*pos + len] != b'e' {
-                if block[*pos + len] < b'0' || block[*pos + len] > b'9' {
-                    return Err(Box::from("Invalid integer"));
-                }
-                len += 1;
-            }
-            
-            if *pos + len >= block.len() {
-                return Err(Box::from("Unexpected end of data in integer"));
-            }
-            
-            let mut num = 0;
-            for i in 0..len {
-                num = num * 10 + (block[*pos + i] - b'0') as i64;
-            }
-            *pos += len + 1;
-            
-            Ok(Entry::Integer(num))
-            
-        } else if block[*pos] == b'l' {
-            *pos += 1;
-            let mut list: Vec<Entry> = Vec::new();
-            
-            while *pos < block.len() && block[*pos] != b'e' {
-                list.push(Self::parse(block, pos)?);
-            }
-            
-            if *pos < block.len() {
-                *pos += 1;
-            } else {
-                return Err(Box::from("Unexpected end of data in list"));
-            }
-            
-            Ok(Entry::List(list))
-            
-        } else if block[*pos] == b'd' {
-            let mut dict: HashMap<String, Entry> = HashMap::new();
-            *pos += 1;
-            
-            while *pos < block.len() && block[*pos] != b'e' {
-                let key = Self::parse(block, pos)?.as_string();
-                let value = Self::parse(block, pos)?;
-                
-                if let Some(s) = key {
-                    let key_str = String::from_utf8(s)?;
-                    dict.insert(key_str, value);
-                }
-            }
-            
-            if *pos < block.len() {
-                *pos += 1;
-            } else {
-                return Err(Box::from("Unexpected end of data in dictionary"));
-            }
-            
-            Ok(Entry::Dict(dict))
-            
-        } else if block[*pos] >= b'0' && block[*pos] <= b'9' {
-            let start = *pos;
-            let mut len = 0;
-            
-            while *pos + len < block.len() && block[*pos + len] != b':' {
-                if block[*pos + len] < b'0' || block[*pos + len] > b'9' {
-                    return Err(Box::from("Invalid string length"));
-                }
-                len += 1;
-            }
-            
-            if *pos + len >= block.len() {
-                return Err(Box::from("Unexpected end of data, missing ':'"));
-            }
-            
-            let mut strlen: usize = 0;
-            for i in 0..len {
-                strlen = strlen * 10 + (block[start + i] - b'0') as usize;
-            }
-            
-            *pos += len + 1;
-            
-            if *pos + strlen > block.len() {
-                return Err(Box::from("String length exceeds data boundaries"));
-            }
-            
-            let result = Vec::from(&block[*pos..*pos + strlen]);
-            *pos += strlen;
-            
-            Ok(Entry::String(result))
-            
-        } else {
-            Err(Box::from(format!("Unexpected character: {}", block[*pos] as char)))
-        }
-    }
+    pub fn into_bencode(&self) -> Bencode {
+        let mut bencode = Bencode::new();
+        let mut info_dict = HashMap::new();
 
-    pub async fn load(&mut self, path: String) -> Result<(), Box<dyn std::error::Error>> {
-        let mut content = fs::read(path).await?;
+        info_dict.insert("piece length".to_string(), Entry::Integer(self.piece_length));
+        info_dict.insert("pieces".to_string(), Entry::String(self.pieces.clone()));
 
-        let mut pos: usize = 0;
+        bencode.value = Entry::Dict(vec![
+            ("announce".to_string(), Entry::String(self.announce.clone())),
+            ("announce-list".to_string(), Entry::List(self.anounce_list.iter().map(|s| Entry::String(s.as_bytes().to_vec())).collect())),
+            ("comment".to_string(), Entry::String(self.comment.clone())),
+            ("created by".to_string(), Entry::String(self.created_by.clone())),
+            ("creation date".to_string(), Entry::Integer(self.creation_date)),
+            ("info".to_string(), Entry::Dict(info_dict)),
+        ].into_iter().collect());
 
-        self.value = Self::parse(content.as_slice(), &mut pos)?;
-
-        Ok(())
-    }
-
-    pub fn get(&self, key: &str) -> Option<Entry> {
-        let dict = self.value.as_dict()?;
-        match dict.get(key) {
-            Some(entry) => Some(entry.clone()),
-            _ => None,
-        }
+        bencode
     }
 }
