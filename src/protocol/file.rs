@@ -17,9 +17,7 @@ pub struct TorrentFile {
     pub info: HashMap<String, Entry>, // The "info" dictionary for V1 and V2
     pub piece_length: u64,
     pub pieces: Vec<[u8; 20]>,        // 20 bytes for each piece (V1)
-    pub pieces_v2: Option<Vec<Vec<u8>>>, // For V2 (Merkle tree or piece hashes)
     pub info_hash: Vec<u8>,           // 20 bytes for V1 (SHA-1)
-    pub info_hash_v2: Option<Vec<u8>>, // 32 bytes for V2 (SHA-256)
     pub name: String,
     pub comment: Option<String>,
     pub created_by: Option<String>,
@@ -135,24 +133,6 @@ impl TorrentFile {
             Vec::new()
         };
         
-        // Parse V2 pieces (if present)
-        let pieces_v2 = if is_v2 {
-            let mut v2_pieces = Vec::new();
-            if let Some(pieces_root) = info.get("pieces root") {
-                if let Some(root_hash) = pieces_root.as_string() {
-                    v2_pieces.push(root_hash.to_vec());
-                }
-            }
-            if let Some(file_tree) = info.get("file tree") {
-                // For full V2 support, we'd need to recursively parse the file tree
-                // This is a simplified version
-                v2_pieces.push(vec![0]); // Placeholder
-            }
-            Some(v2_pieces)
-        } else {
-            None
-        };
-        
         // Parse files
         let files = if let Some(files_list) = info.get("files") {
             // Multi-file torrent
@@ -195,7 +175,7 @@ impl TorrentFile {
             let info_bencode = Bencode {
                 value: Entry::Dict(info.clone()),
             };
-            let encoded_info = info_bencode.format(); // Use the format() method from your API
+            let encoded_info = info_bencode.format();
             
             use sha1::{Sha1, Digest};
             let mut hasher = Sha1::new();
@@ -205,21 +185,6 @@ impl TorrentFile {
             Vec::new()
         };
         
-        // Calculate info hash V2 (SHA-256)
-        let info_hash_v2 = if is_v2 {
-            let info_bencode = Bencode {
-                value: Entry::Dict(info.clone()),
-            };
-            let encoded_info = info_bencode.format();
-            
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            hasher.update(&encoded_info);
-            Some(hasher.finalize().to_vec())
-        } else {
-            None
-        };
-        
         Ok(TorrentFile {
             file_type,
             files,
@@ -227,9 +192,7 @@ impl TorrentFile {
             info: info.clone(),
             piece_length,
             pieces,
-            pieces_v2,
             info_hash,
-            info_hash_v2,
             name,
             comment,
             created_by,
@@ -256,5 +219,9 @@ impl TorrentFile {
     
     pub fn supports_v2(&self) -> bool {
         matches!(self.file_type, TorrentFileType::V2 | TorrentFileType::V1V2)
+    }
+
+    pub fn get_trackers(&self) -> &[String] {
+        &self.trackers
     }
 }
