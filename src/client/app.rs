@@ -31,7 +31,7 @@ impl eframe::App for MyApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add(
-                egui::Image::new(egui::include_image!("bitt.png"))
+                egui::Image::new(egui::include_image!("../../images/bitt.png"))
                 .max_width(180.0),
             );
 
