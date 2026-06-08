@@ -1,8 +1,8 @@
-use egui::accesskit::Checked::True;
 use http_wire::{WireEncode, WireDecode};
 use http::{Request, Response};
 use http_body_util::Full;
 use bytes::Bytes;
+use http_wire::Header;
 use sha1::digest::typenum::U;
 use crate::protocol::connection::{Connection};
 use crate::protocol::peerinfo::PeerInfo;
@@ -99,7 +99,6 @@ impl Tracker {
 
         connection.send(&req.encode()?).await?;
 
-        let mut headers = [http_wire::Header; 16];
         let resp = connection.receive().await?.as_slice();
 
         connection.close().await?;
