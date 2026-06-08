@@ -1,3 +1,4 @@
+use http_wire::response::FullResponse;
 use http_wire::{WireEncode, WireDecode};
 use http::{Request, Response};
 use http_body_util::Full;
@@ -8,6 +9,9 @@ use crate::protocol::connection::{Connection};
 use crate::protocol::peerinfo::PeerInfo;
 use tokio::net::{lookup_host};
 use url::Url;
+use httparse::EMPTY_HEADER;
+use super::bencode::Bencode;
+use anyhow::anyhow;
 
 pub struct Tracker {
     url: String,
@@ -31,6 +35,21 @@ pub struct TrackerRequest {
 impl TrackerRequest {
     pub fn new() -> Self {
         TrackerRequest { info_hash: Vec::new(), peer_id: Vec::new(), port: 0, uploaded: 0, downloaded: 0, left: 0, compact: false, event: None, ip: String::new(), numwant: 0, key: 0, trackerid: 0 }
+    }
+}
+
+pub struct TrackerResponse {
+    pub complete: u32,
+    pub incomplete: u32,
+    pub peers: Vec<PeerInfo>, // peer, completed
+    pub interval: u32,
+    pub min_interval: u32,
+    pub trackerid: u64,
+}
+
+impl TrackerResponse {
+    pub fn new() -> Self {
+        TrackerResponse { complete: 0, incomplete: 0, peers: Vec::new(), interval: 0, min_interval: 0, trackerid: 0 }
     }
 }
 
@@ -99,7 +118,36 @@ impl Tracker {
 
         connection.send(&req.encode()?).await?;
 
-        let resp = connection.receive().await?.as_slice();
+        let mut headers: [Header; 16] = [EMPTY_HEADER; 16];
+        let resp = connection.receive().await?;
+        println!("{}", std::str::from_utf8(resp.as_slice())?);
+        let (response, total_len) = FullResponse::decode(resp.as_slice(), &mut headers)?;
+        let mut bencoder = Bencode::new();
+        bencoder.parse(Vec::from(response.body)).await?;
+        let dict = bencoder.value.as_dict().ok_or("Excpected dictionary in response from tracker")?;
+
+        let mut tracker_response = TrackerResponse::new();
+
+        if dict.contains_key("failure reason")  {
+            return Err(anyhow!("failure reason: {}", std::str::from_utf8(dict["warning reason"].as_string().unwrap_or(Vec::new()).as_slice())?).into());
+        } else if dict.contains_key("warning reason") {
+            eprintln!("warning reason: {}", std::str::from_utf8(dict["warning reason"].as_string().unwrap_or(Vec::new()).as_slice())?);
+        }
+
+        tracker_response.complete = dict["complete"].as_int().ok_or("Expected int for coplete")? as u32;
+        tracker_response.incomplete = dict["incomplete"].as_int().ok_or("Expected int for incomplete")? as u32;
+        tracker_response.interval = dict["trackerid"].as_int().ok_or("Expected int for trackerid")? as u32;
+        tracker_response.interval = dict["interval"].as_int().ok_or("Expected int for interval")? as u32;
+        tracker_response.min_interval = dict["min_interval"].as_int().unwrap_or(tracker_response.interval as i64) as u32;
+
+        // peers parsing
+        if let Some(peers_dict) = dict["peers"].as_dict() {
+            for (_, peer) in peers_dict {
+                tracker_response.peers.push(PeerInfo::from_bencode(&peer)?);
+            }
+        } else if let Some(peers) = dict["peers"].as_string() {
+            // TODO: Add compact mode
+        }
 
         connection.close().await?;
 
