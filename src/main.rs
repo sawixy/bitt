@@ -8,8 +8,16 @@ use http::Request;
 use http_body_util::Full;
 use bytes::Bytes;
 
+mod client;
+use crate::client::app::render;
+
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>>{
+async fn main() -> Result<(), Box<dyn std::error::Error>>
+
+    render().await?;
+
+
     let mut f = Bencode::new();
     f.parse(tokio::fs::read("archlinux-2026.06.01-x86_64.iso.torrent").await?).await?;
     let file = TorrentFile::from_bencode(&f)?;
@@ -27,3 +35,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
 
     Ok(())
 }
+
+
