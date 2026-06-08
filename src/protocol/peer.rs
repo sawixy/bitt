@@ -1,28 +1,46 @@
-use std::collections::HashMap;
+use crate::protocol::connection::{Connection, TcpConnection};
+use crate::protocol::tracker::{TrackerEvent, TrackerRequest};
+use super::tracker::Tracker;
+use super::peerinfo::PeerInfo;
 
-use super::bencode::Entry;
+use super::file::TorrentFile;
 
-pub struct Peer {
-    id: Vec<u8>,  // 20 bytes
-    ip: String,
-    port: u16,
+pub struct Peer<C: Connection> {
+    file: TorrentFile,
+    connections: Vec<C>,
 }
 
-impl Peer {
-    pub fn from_bencode(entry: &Entry) -> Result<Self, Box<dyn std::error::Error>> {
-        let dict = entry.as_dict().ok_or("Expected a dictionary for peer entry")?;
-        let id = dict["peer id"].as_string().ok_or("Expected 'peer id' to be a string")?;
-        let mut ip: String  = String::new();
-        let ip_bytes = dict["ip"].as_string().ok_or("Expected 'ip' to be a string")?.iter().map(|b| ip.push(*b as char));
-        let port = dict["port"].as_int().ok_or("Expected 'port' to be an integer")? as u16;
-        Ok(Self { id, ip, port })
+impl<C: Connection> Peer<C> {
+    pub fn new(file: TorrentFile) -> Self {
+        Self { file, connections: Vec::new() }
     }
 
-    pub fn to_bencode(&self) -> Entry {
-        let mut dict = HashMap::new();
-        dict.insert("peer id".to_string(), Entry::String(self.id.clone()));
-        dict.insert("ip".to_string(), Entry::String(self.ip.as_bytes().to_vec()));
-        dict.insert("port".to_string(), Entry::Integer(self.port as i64));
-        Entry::Dict(dict)
+    pub fn get_file(&self) -> &TorrentFile {
+        &self.file
+    }
+
+    pub async fn announce(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.file.get_trackers().is_empty() {
+            // TODO: Make V2, Magnet support
+            return Err("No trackers found in torrent file".into());
+        }
+
+        let mut conn: TcpConnection = TcpConnection::new(String::from("127.0.0.1"), 0000);
+        let tracker = Tracker::new(self.file.get_trackers()[0].clone());
+
+        let mut tracker_req = TrackerRequest::new();
+        tracker_req.info_hash = vec![65; 20];
+        tracker_req.peer_id = vec![67; 20];
+        tracker_req.port = 6781;
+        tracker_req.downloaded = 0;
+        tracker_req.uploaded = 0;
+        tracker_req.left = 155590;
+        tracker_req.numwant = 100;
+        tracker_req.event = Some(TrackerEvent::Started);
+        tracker_req.compact = false;
+
+        tracker.send_request(&mut conn, tracker_req).await?;
+
+        Ok(())
     }
 }

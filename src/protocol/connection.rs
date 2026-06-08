@@ -2,6 +2,10 @@ use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub trait Connection {
+    fn set_ip(&mut self, ip: String);
+    fn set_port(&mut self, port: u16);
+    fn get_ip(&self, ) -> String;
+    fn get_port(&self) -> u16;
     async fn open(&mut self) -> Result<(), Box<dyn std::error::Error>>;
     async fn close(&mut self) -> Result<(), Box<dyn std::error::Error>>;
     async fn send(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>>;
@@ -26,7 +30,13 @@ impl TcpConnection {
 
 impl Connection for TcpConnection {
     async fn open(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.stream = Some(TcpStream::connect(self.address.as_str()).await?);
+        let ip = if self.address.contains(":") {
+            format!("[{}]:{}", self.address, self.port)
+        } else {
+            format!("{}:{}", self.address, self.port)
+        };
+
+        self.stream = Some(TcpStream::connect(ip.as_str()).await?);
 
         Ok(())
     }
@@ -73,5 +83,21 @@ impl Connection for TcpConnection {
         } else {
             Err("No active connection to receive data".into())
         }
+    }
+
+    fn get_ip(&self) -> String {
+        self.address.clone()
+    }
+
+    fn get_port(&self) -> u16 {
+        self.port
+    }
+
+    fn set_ip(&mut self, ip: String) {
+        self.address = ip;
+    }
+
+    fn set_port(&mut self, port: u16) {
+        self.port = port;
     }
 }

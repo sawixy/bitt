@@ -33,12 +33,6 @@ impl Entry {
             _ => None,
         }
     }
-    pub fn as_dict_mut(&mut self) -> Option<&mut HashMap<String, Entry>> {
-        match self {
-            Entry::Dict(dict) => Option::from(dict),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -195,7 +189,6 @@ impl Bencode {
                 res.push(b'e');
                 return res;
             },
-            _ => Vec::new(),
         }
     }
 
