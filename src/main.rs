@@ -2,7 +2,7 @@ mod protocol;
 mod client;
 use crate::client::app::render;
 use crate::protocol::connection::TcpConnection;
-use protocol::peer::Peer;
+use protocol::session::Session;
 use protocol::file::TorrentFile;
 use protocol::bencode::Bencode;
 
@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = tokio::fs::read("archlinux-2026.06.01-x86_64.iso.torrent").await?;
     let mut bencoder = Bencode::new();
     bencoder.parse(content).await?;
-    let mut client: Peer<TcpConnection> = Peer::new(TorrentFile::from_bencode(&bencoder)?);
+    let mut client: Session<TcpConnection> = Peer::new(TorrentFile::from_bencode(&bencoder)?);
     client.announce().await?;
     render().await?;
 

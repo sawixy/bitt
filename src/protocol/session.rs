@@ -5,12 +5,12 @@ use super::peerinfo::PeerInfo;
 
 use super::file::TorrentFile;
 
-pub struct Peer<C: Connection> {
+pub struct Session<C: Connection> {
     file: TorrentFile,
     connections: Vec<C>,
 }
 
-impl<C: Connection> Peer<C> {
+impl<C: Connection> Session<C> {
     pub fn new(file: TorrentFile) -> Self {
         Self { file, connections: Vec::new() }
     }
@@ -30,7 +30,7 @@ impl<C: Connection> Peer<C> {
 
         let mut tracker_req = TrackerRequest::new();
         tracker_req.info_hash = vec![65; 20];
-        tracker_req.peer_id = vec![67; 20];
+        tracker_req.peer_id = vec![68; 20];
         tracker_req.port = 6781;
         tracker_req.downloaded = 0;
         tracker_req.uploaded = 0;
