@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = tokio::fs::read("archlinux-2026.06.01-x86_64.iso.torrent").await?;
     let mut bencoder = Bencode::new();
     bencoder.parse(content).await?;
-    let mut client: Session<TcpConnection> = Peer::new(TorrentFile::from_bencode(&bencoder)?);
+    let mut client: Session<TcpConnection> = Session::new(TorrentFile::from_bencode(&bencoder)?);
     client.announce().await?;
     render().await?;
 

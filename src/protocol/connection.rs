@@ -1,7 +1,7 @@
 use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub trait Connection {
+pub trait Connection: Default {
     fn set_ip(&mut self, ip: String);
     fn set_port(&mut self, port: u16);
     fn get_ip(&self, ) -> String;
@@ -15,6 +15,7 @@ pub trait Connection {
 
 const BUFFER_SIZE: usize = 4096;
 
+#[derive(Default)]
 pub struct TcpConnection {
     stream: Option<TcpStream>,
     listener: Option<TcpListener>,
