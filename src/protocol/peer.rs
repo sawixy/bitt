@@ -39,7 +39,8 @@ impl<C: Connection> Peer<C> {
         tracker_req.event = Some(TrackerEvent::Started);
         tracker_req.compact = false;
 
-        tracker.send_request(&mut conn, tracker_req).await?;
+        let response = tracker.send_request(&mut conn, tracker_req).await?;
+        println!("{:#?}", response);
 
         Ok(())
     }

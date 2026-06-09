@@ -4,19 +4,20 @@ use http::{Request, Response};
 use http_body_util::Full;
 use bytes::Bytes;
 use http_wire::Header;
-use sha1::digest::typenum::U;
 use crate::protocol::connection::{Connection};
 use crate::protocol::peerinfo::PeerInfo;
 use tokio::net::{lookup_host};
 use url::Url;
 use httparse::EMPTY_HEADER;
-use super::bencode::Bencode;
+use super::bencode::{Entry, Bencode};
 use anyhow::anyhow;
 
+#[derive(Debug)]
 pub struct Tracker {
     url: String,
 }
 
+#[derive(Debug)]
 pub struct TrackerRequest {
     pub info_hash: Vec<u8>, // 20 bytes
     pub peer_id: Vec<u8>,   // 20 bytes
@@ -29,7 +30,7 @@ pub struct TrackerRequest {
     pub ip: String,
     pub numwant: u64,
     pub key: u64,
-    pub trackerid: u64,
+    pub trackerid: i64,
 }
 
 impl TrackerRequest {
@@ -38,13 +39,14 @@ impl TrackerRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct TrackerResponse {
     pub complete: u32,
     pub incomplete: u32,
-    pub peers: Vec<PeerInfo>, // peer, completed
+    pub peers: Vec<PeerInfo>,
     pub interval: u32,
     pub min_interval: u32,
-    pub trackerid: u64,
+    pub trackerid: i64,
 }
 
 impl TrackerResponse {
@@ -53,6 +55,7 @@ impl TrackerResponse {
     }
 }
 
+#[derive(Debug)]
 pub enum TrackerEvent {
     Started,
     Stopped,
@@ -68,7 +71,7 @@ impl Tracker {
         &self.url
     }
 
-    pub async fn send_request<C: Connection>(&self, connection: &mut C, req: TrackerRequest) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send_request<C: Connection>(&self, connection: &mut C, req: TrackerRequest) -> Result<TrackerResponse, Box<dyn std::error::Error>> {
         let parsed = Url::parse(&self.url)?;
         let port = parsed.port();
         let host_with_port = format!("{}:{}", parsed.domain().ok_or("Expected domain in URL")?, port.unwrap_or(443));
@@ -120,7 +123,6 @@ impl Tracker {
 
         let mut headers: [Header; 16] = [EMPTY_HEADER; 16];
         let resp = connection.receive().await?;
-        println!("{}", std::str::from_utf8(resp.as_slice())?);
         let (response, total_len) = FullResponse::decode(resp.as_slice(), &mut headers)?;
         let mut bencoder = Bencode::new();
         bencoder.parse(Vec::from(response.body)).await?;
@@ -128,29 +130,32 @@ impl Tracker {
 
         let mut tracker_response = TrackerResponse::new();
 
-        if dict.contains_key("failure reason")  {
-            return Err(anyhow!("failure reason: {}", std::str::from_utf8(dict["warning reason"].as_string().unwrap_or(Vec::new()).as_slice())?).into());
-        } else if dict.contains_key("warning reason") {
-            eprintln!("warning reason: {}", std::str::from_utf8(dict["warning reason"].as_string().unwrap_or(Vec::new()).as_slice())?);
+        if let Some(failure) = dict.get("failure reason") {
+            return Err(anyhow!("failure reason: {}", std::str::from_utf8(failure.as_string().unwrap_or(Vec::new()).as_slice())?).into());
+        } else if let Some(warning) = dict.get("warning reason") {
+            eprintln!("warning reason: {}", std::str::from_utf8(warning.as_string().unwrap_or(Vec::new()).as_slice())?);
         }
 
-        tracker_response.complete = dict["complete"].as_int().ok_or("Expected int for coplete")? as u32;
-        tracker_response.incomplete = dict["incomplete"].as_int().ok_or("Expected int for incomplete")? as u32;
-        tracker_response.interval = dict["trackerid"].as_int().ok_or("Expected int for trackerid")? as u32;
-        tracker_response.interval = dict["interval"].as_int().ok_or("Expected int for interval")? as u32;
-        tracker_response.min_interval = dict["min_interval"].as_int().unwrap_or(tracker_response.interval as i64) as u32;
+        tracker_response.complete = dict.get("complete").ok_or("Expected complete")?.as_int().ok_or("Expected int for complete")? as u32;
+        tracker_response.incomplete = dict.get("incomplete").ok_or("Expected incomplete")?.as_int().ok_or("Expected int for incomplete")? as u32;
+        tracker_response.trackerid = dict.get("trackerid").unwrap_or(&Entry::Integer(0i64)).as_int().ok_or("Expected int for trackerid")?;
+        tracker_response.interval = dict.get("interval").ok_or("Expected interval")?.as_int().ok_or("Expected int for interval")? as u32;
+        tracker_response.min_interval = dict.get("min_interval").unwrap_or(&Entry::Integer(tracker_response.trackerid as i64)).as_int().unwrap_or(tracker_response.interval as i64) as u32;
 
         // peers parsing
-        if let Some(peers_dict) = dict["peers"].as_dict() {
-            for (_, peer) in peers_dict {
+        if let Some(peers_dict) = dict.get("peers").and_then(|p| p.as_list()) {
+            for peer in peers_dict {
                 tracker_response.peers.push(PeerInfo::from_bencode(&peer)?);
             }
-        } else if let Some(peers) = dict["peers"].as_string() {
-            // TODO: Add compact mode
+        } else if let Some(peers) = dict.get("peers").and_then(|p| p.as_string()) {
+            for i in 0..peers.len()/6 {
+                let info = PeerInfo::new(None, format!("{}.{}.{}.{}", peers[i*6], peers[i*6+1], peers[i*6+2], peers[i*6+3]), (peers[i*6+4] as u16) << 8 | peers[i*6+5] as u16);
+                tracker_response.peers.push(info);
+            }
         }
 
         connection.close().await?;
 
-        Ok(())
+        Ok(tracker_response)
     }
 }
