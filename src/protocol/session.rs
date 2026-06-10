@@ -2,17 +2,21 @@ use crate::protocol::connection::{Connection, TcpConnection};
 use crate::protocol::tracker::{TrackerEvent, TrackerRequest};
 use super::tracker::Tracker;
 use super::peerinfo::PeerInfo;
+use super::peer::Peer;
 
 use super::file::TorrentFile;
 
 pub struct Session<C: Connection> {
     file: TorrentFile,
-    connections: Vec<C>,
+    peers: Vec<Peer<C>>,
+    info: PeerInfo,
 }
 
 impl<C: Connection> Session<C> {
     pub fn new(file: TorrentFile) -> Self {
-        Self { file, connections: Vec::new() }
+        let peer_id = Vec::new();
+        let ip = String::new();
+        Self { file, peers: Vec::new(), info: PeerInfo::new(Some(peer_id), ip, 6881) }
     }
 
     pub fn get_file(&self) -> &TorrentFile {
@@ -41,6 +45,14 @@ impl<C: Connection> Session<C> {
 
         let response = tracker.send_request(&mut conn, tracker_req).await?;
         println!("{:#?}", response);
+
+        Ok(())
+    }
+
+    pub async fn download(&mut self, callback: Box<dyn Fn(Vec<u8>)>) -> Result<(), Box<dyn std::error::Error>> {
+        for peer in &mut self.peers {
+            peer.send_handshake(self.file.clone()).await?;
+        }
 
         Ok(())
     }

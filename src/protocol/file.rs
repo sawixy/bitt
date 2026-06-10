@@ -1,7 +1,8 @@
 use super::bencode::{Entry, Bencode};
 use std::collections::HashMap;
+use sha1::{Sha1, Digest};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TorrentFileType {
     Magnet, // V1 without trackers (DHT, PEX, LPD)
     V1,
@@ -9,7 +10,7 @@ pub enum TorrentFileType {
     V1V2,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TorrentFile {
     pub file_type: TorrentFileType,
     pub files: Vec<(String, u64)>,    // (path, size)
@@ -177,7 +178,6 @@ impl TorrentFile {
             };
             let encoded_info = info_bencode.format();
             
-            use sha1::{Sha1, Digest};
             let mut hasher = Sha1::new();
             hasher.update(&encoded_info);
             hasher.finalize().to_vec()
@@ -223,5 +223,9 @@ impl TorrentFile {
 
     pub fn get_trackers(&self) -> &[String] {
         &self.trackers
+    }
+
+    pub fn get_info_hash(&self) -> Vec<u8> {
+        self.info_hash.clone()
     }
 }
