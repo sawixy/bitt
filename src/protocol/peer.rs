@@ -17,7 +17,7 @@ pub enum PeerMessageType {
     Request,
     Piece,
     Cancel,
-    Unknown,
+    KeepAlive,
 }
 
 pub struct PeerMessage {
@@ -132,9 +132,11 @@ impl<C: Connection> Peer<C> {
 
         Ok(())
     }
-    pub async fn send_message(&mut self, msg: PeerMessage) -> Result<(), Box<dyn std::error::Error>> {
+        pub async fn send_message(&mut self, msg: PeerMessage) -> Result<(), Box<dyn std::error::Error>> {
         let mut raw: Vec<u8> = Vec::new();
-        raw.push(match msg.msg_type {
+        
+        // Message ID (1 byte)
+        let message_id: u8 = match msg.msg_type {
             PeerMessageType::Choke => 0,
             PeerMessageType::Unchoke => 1,
             PeerMessageType::Interested => 2,
@@ -144,22 +146,47 @@ impl<C: Connection> Peer<C> {
             PeerMessageType::Request => 6,
             PeerMessageType::Piece => 7,
             PeerMessageType::Cancel => 8,
-            PeerMessageType::Unknown => return Err(anyhow!("Message type is unknown").into()),
-        });
-
-        raw.push(msg.payload.len() as u8);
-        raw.extend(msg.payload.iter());
+            PeerMessageType::KeepAlive => return Err(anyhow!("Message type is KeepAlive").into()),
+        };
+        
+        // Length prefix: 4 bytes big-endian = 1 (message id) + payload length
+        let length = 1u32 + msg.payload.len() as u32;
+        raw.extend_from_slice(&length.to_be_bytes());
+        
+        // Message ID
+        raw.push(message_id);
+        
+        // Payload
+        raw.extend_from_slice(&msg.payload);
 
         self.conn.send(raw.as_slice()).await?;
-
         Ok(())
     }
 
     pub async fn recv_message(&mut self) -> Result<PeerMessage, Box<dyn std::error::Error>> {
-        let mut msg = PeerMessage::new();
-
         let raw = self.conn.receive().await?;
-        msg.msg_type = match raw[0] {
+        
+        if raw.len() < 4 {
+            return Err(anyhow!("Message too short").into());
+        }
+        
+        // Read 4-byte length prefix (big-endian)
+        let length = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+        
+        // Keep-alive (length = 0)
+        if length == 0 {
+            return Ok(PeerMessage {
+                msg_type: PeerMessageType::KeepAlive,
+                payload: Vec::new(),
+            });
+        }
+        
+        if raw.len() < 4 + length {
+            return Err(anyhow!("Message body too short").into());
+        }
+        
+        // Message ID is at raw[4]
+        let msg_type = match raw[4] {
             0 => PeerMessageType::Choke,
             1 => PeerMessageType::Unchoke,
             2 => PeerMessageType::Interested,
@@ -169,12 +196,14 @@ impl<C: Connection> Peer<C> {
             6 => PeerMessageType::Request,
             7 => PeerMessageType::Piece,
             8 => PeerMessageType::Cancel,
-            _ => PeerMessageType::Unknown,
+            _ => PeerMessageType::KeepAlive,
         };
-
-        let mut data: Vec<u8> = Vec::new();
-        data.extend_from_slice(raw[2..(raw[1] as usize)].iter().as_slice());
-
-        Ok(msg)
+        
+        let payload = raw[5..4 + length].to_vec();
+        
+        Ok(PeerMessage {
+            msg_type,
+            payload,
+        })
     }
 }
