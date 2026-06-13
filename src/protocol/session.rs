@@ -51,7 +51,7 @@ impl<C: Connection> Session<C> {
 
     pub async fn download(&mut self, callback: Box<dyn Fn(Vec<u8>)>) -> Result<(), Box<dyn std::error::Error>> {
         for peer in &mut self.peers {
-            peer.send_handshake(self.file.clone()).await?;
+            peer.send_handshake().await?;
         }
 
         Ok(())

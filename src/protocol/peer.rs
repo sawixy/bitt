@@ -1,6 +1,28 @@
+use anyhow::anyhow;
+
 use super::connection::Connection;
 use super::file::TorrentFile;
 use super::peerinfo::PeerInfo;
+
+use std::sync::Arc;
+
+pub enum PeerMessageType {
+    Choke,
+    Unchoke,
+    Interested,
+    NotInterested,
+    Have,
+    Bitfield,
+    Request,
+    Piece,
+    Cancel,
+}
+
+pub struct PeerMessage {
+    pub msg_type: PeerMessageType,
+    pub length: u8,
+    pub payload: Vec<u8>
+}
 
 pub struct Peer<C: Connection> {
     info: PeerInfo,
@@ -10,10 +32,11 @@ pub struct Peer<C: Connection> {
     interested: bool,
     peer_choking: bool,
     peer_interested: bool,
+    file: Arc<TorrentFile>,
 }
 
 impl<C: Connection> Peer<C> {
-    pub fn new(conn: C, info: PeerInfo, peer_info: PeerInfo) -> Self {
+    pub fn new(conn: C, info: PeerInfo, peer_info: PeerInfo, file: Arc<TorrentFile>) -> Self {
         Self {
             conn,
             choking: true,
@@ -22,6 +45,7 @@ impl<C: Connection> Peer<C> {
             peer_interested: false,
             info: info,
             peer_info: peer_info,
+            file: file,
         }
     }
     
@@ -61,26 +85,17 @@ impl<C: Connection> Peer<C> {
         &mut self.conn
     }
 
-    pub async fn send_handshake(&mut self, file: TorrentFile) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send_handshake(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut handshake: Vec<u8> = Vec::new();
         handshake.push(19);
         
-        for ch in b"BitTorrent protocol" {
-            handshake.push(*ch);
-        }
+        handshake.extend_from_slice(b"BitTorrent Protocol");
 
         // reserved
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
-        handshake.push(0);
+        handshake.extend_from_slice(&[0u8; 8]);
 
         // info_hash
-        file.get_info_hash().iter().for_each(|&b| handshake.push(b));
+        self.file.get_info_hash().iter().for_each(|&b| handshake.push(b));
         
         // peerinfo
         if let Some(id) = self.info.get_id() {
@@ -88,6 +103,22 @@ impl<C: Connection> Peer<C> {
         }
 
         self.conn.send(handshake.as_slice()).await?;
+
+        Ok(())
+    }
+
+    pub async fn recv_handshake(&mut self, file: TorrentFile) -> Result<(), Box<dyn std::error::Error>> {
+        let raw: Vec<u8> = self.conn.receive().await?;
+        if raw[0] != 19 || &raw[1..20] != b"BitTorrent Protocol" {
+            return Err(anyhow!("Invalid protocol").into());
+        }
+
+        let info_hash = &raw[21..41];
+        if info_hash != self.file.get_info_hash().as_slice() {
+            return Err(anyhow!("Info hash doesnt match").into())
+        }
+
+        // peer id skipped (i dont care about it)
 
         Ok(())
     }
