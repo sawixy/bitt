@@ -4,6 +4,7 @@ use super::connection::Connection;
 use super::file::TorrentFile;
 use super::peerinfo::PeerInfo;
 
+use std::any;
 use std::sync::Arc;
 
 pub enum PeerMessageType {
@@ -16,12 +17,21 @@ pub enum PeerMessageType {
     Request,
     Piece,
     Cancel,
+    Unknown,
 }
 
 pub struct PeerMessage {
     pub msg_type: PeerMessageType,
-    pub length: u8,
     pub payload: Vec<u8>
+}
+
+impl PeerMessage {
+    pub fn new() -> Self {
+        Self {
+            msg_type: PeerMessageType::Unchoke,
+            payload: Vec::new(),
+        }
+    }
 }
 
 pub struct Peer<C: Connection> {
@@ -121,5 +131,50 @@ impl<C: Connection> Peer<C> {
         // peer id skipped (i dont care about it)
 
         Ok(())
+    }
+    pub async fn send_message(&mut self, msg: PeerMessage) -> Result<(), Box<dyn std::error::Error>> {
+        let mut raw: Vec<u8> = Vec::new();
+        raw.push(match msg.msg_type {
+            PeerMessageType::Choke => 0,
+            PeerMessageType::Unchoke => 1,
+            PeerMessageType::Interested => 2,
+            PeerMessageType::NotInterested => 3,
+            PeerMessageType::Have => 4,
+            PeerMessageType::Bitfield => 5,
+            PeerMessageType::Request => 6,
+            PeerMessageType::Piece => 7,
+            PeerMessageType::Cancel => 8,
+            PeerMessageType::Unknown => return Err(anyhow!("Message type is unknown").into()),
+        });
+
+        raw.push(msg.payload.len() as u8);
+        raw.extend(msg.payload.iter());
+
+        self.conn.send(raw.as_slice()).await?;
+
+        Ok(())
+    }
+
+    pub async fn recv_message(&mut self) -> Result<PeerMessage, Box<dyn std::error::Error>> {
+        let mut msg = PeerMessage::new();
+
+        let raw = self.conn.receive().await?;
+        msg.msg_type = match raw[0] {
+            0 => PeerMessageType::Choke,
+            1 => PeerMessageType::Unchoke,
+            2 => PeerMessageType::Interested,
+            3 => PeerMessageType::NotInterested,
+            4 => PeerMessageType::Have,
+            5 => PeerMessageType::Bitfield,
+            6 => PeerMessageType::Request,
+            7 => PeerMessageType::Piece,
+            8 => PeerMessageType::Cancel,
+            _ => PeerMessageType::Unknown,
+        };
+
+        let mut data: Vec<u8> = Vec::new();
+        data.extend_from_slice(raw[2..(raw[1] as usize)].iter().as_slice());
+
+        Ok(msg)
     }
 }
