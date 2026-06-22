@@ -60,7 +60,7 @@ impl eframe::App for MyApp {
 
 
             let bar = egui::ProgressBar::new(self.progress)
-            .show_percentage()
+            .show_percentage();
             // .animate(true);
             ui.add(bar);
 
