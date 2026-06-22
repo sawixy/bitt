@@ -1,59 +1,48 @@
+use crate::protocol::bitfield::BitField;
 use crate::protocol::connection::{Connection, TcpConnection};
-use crate::protocol::tracker::{TrackerEvent, TrackerRequest};
+use crate::protocol::peer::{self, PeerMessage, PeerMessageType};
+use crate::protocol::tracker::{TrackerEvent, TrackerRequest, TrackerResponse};
 use super::tracker::Tracker;
 use super::peerinfo::PeerInfo;
 use super::peer::Peer;
-
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use super::file::TorrentFile;
+use super::storage::Storage;
 
-pub struct Session<C: Connection> {
-    file: TorrentFile,
-    peers: Vec<Peer<C>>,
+const TRIES: usize = 10;
+
+pub struct Session<S: Storage> {
+    file: Arc<TorrentFile>,
+    peers: Arc<RwLock<Vec<Peer<TcpConnection>>>>,
     info: PeerInfo,
+    storage: S,
 }
 
-impl<C: Connection> Session<C> {
-    pub fn new(file: TorrentFile) -> Self {
+impl<S> Session<S> where S: Storage {
+    pub fn new(file: TorrentFile, storage: S) -> Self {
         let peer_id = Vec::new();
         let ip = String::new();
-        Self { file, peers: Vec::new(), info: PeerInfo::new(Some(peer_id), ip, 6881) }
+        Self { file: Arc::new(file), peers: Arc::new(RwLock::new(Vec::new())), info: PeerInfo::new(Some(peer_id), ip, 6881), storage: storage }
     }
 
     pub fn get_file(&self) -> &TorrentFile {
         &self.file
     }
 
-    pub async fn announce(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.file.get_trackers().is_empty() {
-            // TODO: Make V2, Magnet support
-            return Err("No trackers found in torrent file".into());
-        }
-
-        let mut conn: TcpConnection = TcpConnection::new(String::from("127.0.0.1"), 0000);
-        let tracker = Tracker::new(self.file.get_trackers()[0].clone());
-
-        let mut tracker_req = TrackerRequest::new();
-        tracker_req.info_hash = vec![65; 20];
-        tracker_req.peer_id = vec![68; 20];
-        tracker_req.port = 6781;
-        tracker_req.downloaded = 0;
-        tracker_req.uploaded = 0;
-        tracker_req.left = 155590;
-        tracker_req.numwant = 100;
-        tracker_req.event = Some(TrackerEvent::Started);
-        tracker_req.compact = false;
-
-        let response = tracker.send_request(&mut conn, tracker_req).await?;
-        println!("{:#?}", response);
-
-        Ok(())
+    pub async fn add_peer(&self, peer: Peer<TcpConnection>) {
+        self.peers.write().await.push(peer);
     }
 
-    pub async fn download(&mut self, callback: Box<dyn Fn(Vec<u8>)>) -> Result<(), Box<dyn std::error::Error>> {
-        for peer in &mut self.peers {
-            peer.send_handshake().await?;
-        }
+    pub async fn remove_peer(&self, peerinfo: PeerInfo) {
+        self.peers.write().await.retain(|p| p.get_peerinfo().get_id() == peerinfo.get_id() &&
+                                                                  p.get_peerinfo().get_ip() == peerinfo.get_ip() && 
+                                                                  p.get_peerinfo().get_port() == peerinfo.get_port())
+    }
+
+    pub async fn download(&self, storage: S) -> Result<(), Box<dyn std::error::Error>> {
+        
 
         Ok(())
-    }
+    } 
 }

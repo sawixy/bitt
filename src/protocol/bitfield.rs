@@ -1,8 +1,16 @@
+#[derive(Clone)]
 pub struct BitField {
     bits: Vec<u64>,
 }
 
 impl BitField {
+    pub fn new(num_bits: usize) -> Self {
+        let num_u64s = (num_bits + 63) / 64;
+        Self {
+            bits: vec![0u64; num_u64s],
+        }
+    }
+
     pub fn from_vec(data: Vec<u8>) -> Self {
         let bits: Vec<u64> = data
             .chunks(8)
@@ -24,12 +32,29 @@ impl BitField {
     }
 
     pub fn get_bit(&self, index: usize) -> u64 {
-        if index/64 >= self.bits.len() { return 0; }
-        self.bits[index/64] & (1 << index%64)
+        let chunk_idx = index / 64;
+        let bit_idx = index % 64;
+        
+        if chunk_idx >= self.bits.len() {
+            return 0;
+        }
+        
+        (self.bits[chunk_idx] >> bit_idx) & 1
     }
 
-    pub fn set_bit(&mut self, index: usize) {
-        self.bits[index/64] |= 1 << index%64;
+    pub fn set_bit(&mut self, index: usize, value: u64) {
+        let chunk_idx = index / 64;
+        let bit_idx = index % 64;
+        
+        if chunk_idx >= self.bits.len() {
+            return;
+        }
+        
+        if value == 1 {
+            self.bits[chunk_idx] |= 1 << bit_idx;
+        } else {
+            self.bits[chunk_idx] &= !(1 << bit_idx);
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::bencode::Entry;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeerInfo {
     id: Option<Vec<u8>>,  // 20 bytes
     ip: String,

@@ -5,3 +5,5 @@ pub mod peerinfo;
 pub mod connection;
 pub mod session;
 pub mod peer;
+pub mod bitfield;
+pub mod storage;

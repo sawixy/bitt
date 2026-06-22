@@ -10,6 +10,7 @@ pub trait Connection: Default {
     async fn close(&mut self) -> Result<(), Box<dyn std::error::Error>>;
     async fn send(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>>;
     async fn receive(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
+    async fn read_exact(&mut self, size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
     async fn listen(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
@@ -67,6 +68,15 @@ impl Connection for TcpConnection {
         }
 
         Ok(())
+    }
+
+    async fn read_exact(&mut self, size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let stream = self.stream.as_mut()
+            .ok_or("No active connection")?;
+        
+        let mut buffer = vec![0u8; size];
+        stream.read_exact(&mut buffer).await?;
+        Ok(buffer)
     }
 
     async fn receive(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
