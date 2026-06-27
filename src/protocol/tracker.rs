@@ -1,161 +1,206 @@
-use http_wire::response::FullResponse;
-use http_wire::{WireEncode, WireDecode};
-use http::{Request, Response};
-use http_body_util::Full;
-use bytes::Bytes;
-use http_wire::Header;
-use crate::protocol::connection::{Connection};
-use crate::protocol::peerinfo::PeerInfo;
-use tokio::net::{lookup_host};
+use anyhow::{anyhow, Context, Result};
+use reqwest::Client;
 use url::Url;
-use httparse::EMPTY_HEADER;
-use super::bencode::{Entry, Bencode};
-use anyhow::anyhow;
 
-#[derive(Debug)]
-pub struct Tracker {
-    url: String,
+use super::bencode::{Bencode, Entry};
+use crate::protocol::peerinfo::PeerInfo;
+
+#[derive(Debug, Clone, Copy)]
+pub enum TrackerEvent {
+    Started,
+    Stopped,
+    Completed,
 }
 
 #[derive(Debug)]
 pub struct TrackerRequest {
-    pub info_hash: Vec<u8>, // 20 bytes
-    pub peer_id: Vec<u8>,   // 20 bytes
+    pub info_hash: Vec<u8>,
+    pub peer_id: Vec<u8>,
     pub port: u16,
     pub uploaded: u64,
     pub downloaded: u64,
     pub left: u64,
     pub compact: bool,
     pub event: Option<TrackerEvent>,
-    pub ip: String,
-    pub numwant: u64,
-    pub key: u64,
-    pub trackerid: i64,
-}
-
-impl TrackerRequest {
-    pub fn new() -> Self {
-        TrackerRequest { info_hash: Vec::new(), peer_id: Vec::new(), port: 0, uploaded: 0, downloaded: 0, left: 0, compact: false, event: None, ip: String::new(), numwant: 0, key: 0, trackerid: 0 }
-    }
+    pub numwant: u32,
+    pub key: Option<u32>,
+    pub tracker_id: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct TrackerResponse {
     pub complete: u32,
     pub incomplete: u32,
-    pub peers: Vec<PeerInfo>,
     pub interval: u32,
     pub min_interval: u32,
-    pub trackerid: i64,
+    pub tracker_id: Option<String>,
+    pub peers: Vec<PeerInfo>,
 }
 
-impl TrackerResponse {
-    pub fn new() -> Self {
-        TrackerResponse { complete: 0, incomplete: 0, peers: Vec::new(), interval: 0, min_interval: 0, trackerid: 0 }
-    }
-}
-
-#[derive(Debug)]
-pub enum TrackerEvent {
-    Started,
-    Stopped,
-    Completed
+pub struct Tracker {
+    client: Client,
+    url: Url,
 }
 
 impl Tracker {
-    pub fn new(url: String) -> Self {
-        Self { url }
+    pub fn new(url: String) -> Result<Self> {
+        Ok(Self {
+            client: Client::new(),
+            url: Url::parse(&url)?,
+        })
     }
 
-    pub fn get_url(&self) -> &String {
-        &self.url
-    }
+    pub async fn send_request(&self, req: &TrackerRequest) -> Result<TrackerResponse, Box<dyn std::error::Error>> {
+        if req.info_hash.len() != 20 {
+            return Err(anyhow!("info_hash must be 20 bytes").into());
+        }
 
-    pub async fn send_request<C: Connection>(&self, connection: &mut C, req: TrackerRequest) -> Result<TrackerResponse, Box<dyn std::error::Error>> {
-        let parsed = Url::parse(&self.url)?;
-        let port = parsed.port();
-        let host_with_port = format!("{}:{}", parsed.domain().ok_or("Expected domain in URL")?, port.unwrap_or(443));
-        let sock_addr = lookup_host(host_with_port).await?.next().ok_or("Failed to resolve domain")?;
-        
-        connection.set_ip(sock_addr.ip().to_string());
-        connection.set_port(match port {
-            Some(p) => p,
-            None => 433,
-        });
-        connection.open().await?;
+        if req.peer_id.len() != 20 {
+            return Err(anyhow!(format!("peer_id must be 20 bytes, but it {}", req.peer_id.len())).into());
+        }
 
-        let mut info_hash = String::new();
-        req.info_hash.iter().for_each(|b| info_hash.push(*b as char));
-
-        let mut peer_id = String::new();
-        req.peer_id.iter().for_each(|b| peer_id.push(*b as char));
-
-        let request = format!(
-            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}&ip={}&numwant={}&key={}&trackerid={}{}",
-            info_hash,
-            peer_id,
+        let query_string = format!(
+            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}&numwant={}{}{}{}",
+            percent_encode(&req.info_hash),
+            percent_encode(&req.peer_id),
             req.port,
             req.uploaded,
             req.downloaded,
             req.left,
-            match req.compact { true => 1, false => 0 },
-            req.ip,
+            if req.compact { "1" } else { "0" },
             req.numwant,
-            req.key,
-            req.trackerid,
-            match req.event {
-                Some(event) => match event {
-                    TrackerEvent::Started => "&event=started",
-                    TrackerEvent::Stopped => "&event=stopped",
-                    TrackerEvent::Completed => "&event=completed",
-                },
-                None => ""
-            }
+            if let Some(ref id) = req.tracker_id {
+                format!("&trackerid={}", percent_encode(id.as_bytes()))
+            } else {
+                String::new()
+            },
+            if let Some(key) = req.key {
+                format!("&key={}", key)
+            } else {
+                String::new()
+            },
+            if let Some(event) = req.event {
+                format!(
+                    "&event={}",
+                    match event {
+                        TrackerEvent::Started => "started",
+                        TrackerEvent::Stopped => "stopped",
+                        TrackerEvent::Completed => "completed",
+                    }
+                )
+            } else {
+                String::new()
+            },
         );
 
+        let url_string = format!("{}?{}", self.url.as_str().trim_end_matches('/'), query_string);
 
-        let req = Request::builder()
-            .method("GET")
-            .uri(format!("/announce?{}", request))
-            .body(Full::new(Bytes::from("")))?;
+        let body = self.client
+            .get(&url_string)
+            .send()
+            .await?
+            .error_for_status()?  
+            .bytes()
+            .await?;
+        let mut decoder = Bencode::new();
+        decoder.parse(body.to_vec()).await?;
 
-        connection.send(&req.encode()?).await?;
+        let dict = decoder.value
+            .as_dict()
+            .ok_or_else(|| anyhow!("tracker response is not a dictionary"))?;
 
-        let mut headers: [Header; 16] = [EMPTY_HEADER; 16];
-        let resp = connection.receive().await?;
-        let (response, total_len) = FullResponse::decode(resp.as_slice(), &mut headers)?;
-        let mut bencoder = Bencode::new();
-        bencoder.parse(Vec::from(response.body)).await?;
-        let dict = bencoder.value.as_dict().ok_or("Excpected dictionary in response from tracker")?;
-
-        let mut tracker_response = TrackerResponse::new();
-
-        if let Some(failure) = dict.get("failure reason") {
-            return Err(anyhow!("failure reason: {}", std::str::from_utf8(failure.as_string().unwrap_or(Vec::new()).as_slice())?).into());
-        } else if let Some(warning) = dict.get("warning reason") {
-            eprintln!("warning reason: {}", std::str::from_utf8(warning.as_string().unwrap_or(Vec::new()).as_slice())?);
-        }
-
-        tracker_response.complete = dict.get("complete").ok_or("Expected complete")?.as_int().ok_or("Expected int for complete")? as u32;
-        tracker_response.incomplete = dict.get("incomplete").ok_or("Expected incomplete")?.as_int().ok_or("Expected int for incomplete")? as u32;
-        tracker_response.trackerid = dict.get("trackerid").unwrap_or(&Entry::Integer(0i64)).as_int().ok_or("Expected int for trackerid")?;
-        tracker_response.interval = dict.get("interval").ok_or("Expected interval")?.as_int().ok_or("Expected int for interval")? as u32;
-        tracker_response.min_interval = dict.get("min_interval").unwrap_or(&Entry::Integer(tracker_response.trackerid as i64)).as_int().unwrap_or(tracker_response.interval as i64) as u32;
-
-        // peers parsing
-        if let Some(peers_dict) = dict.get("peers").and_then(|p| p.as_list()) {
-            for peer in peers_dict {
-                tracker_response.peers.push(PeerInfo::from_bencode(&peer)?);
-            }
-        } else if let Some(peers) = dict.get("peers").and_then(|p| p.as_string()) {
-            for i in 0..peers.len()/6 {
-                let info = PeerInfo::new(None, format!("{}.{}.{}.{}", peers[i*6], peers[i*6+1], peers[i*6+2], peers[i*6+3]), (peers[i*6+4] as u16) << 8 | peers[i*6+5] as u16);
-                tracker_response.peers.push(info);
+        if let Some(reason) = dict.get("failure reason") {
+            if let Some(bytes) = reason.as_string() {
+                return Err(anyhow!(
+                    "tracker failure: {}",
+                    String::from_utf8_lossy(&bytes)
+                ).into());
             }
         }
 
-        connection.close().await?;
+        if let Some(warning) = dict.get("warning message") {
+            if let Some(bytes) = warning.as_string() {
+                eprintln!(
+                    "tracker warning: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+        }
 
-        Ok(tracker_response)
+        Ok(TrackerResponse {
+            complete: get_u32(&dict, "complete", 0),
+            incomplete: get_u32(&dict, "incomplete", 0),
+            interval: get_u32(&dict, "interval", 1800),
+            min_interval: get_u32(
+                &dict,
+                "min interval",
+                get_u32(&dict, "interval", 1800),
+            ),
+            tracker_id: dict
+                .get("tracker id")
+                .and_then(|v| v.as_string())
+                .map(|v| String::from_utf8_lossy(&v).into()),
+
+            peers: parse_peers(&dict)?,
+        })
     }
+}
+
+fn get_u32(dict: &std::collections::HashMap<String, Entry>, key: &str, default: u32) -> u32 {
+    dict.get(key)
+        .and_then(|v| v.as_int())
+        .unwrap_or(default as i64) as u32
+}
+
+fn parse_peers(dict: &std::collections::HashMap<String, Entry>) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
+    let mut peers = Vec::new();
+
+    // compact mode
+    if let Some(value) = dict.get("peers") {
+        if let Some(bytes) = value.as_string() {
+            if bytes.len() % 6 == 0 {
+                for chunk in bytes.chunks_exact(6) {
+                    let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                    let port = ((chunk[4] as u16) << 8) | chunk[5] as u16;
+                    peers.push(PeerInfo::new(None, ip, port));
+                }
+                return Ok(peers);
+            }
+        }
+    }
+
+    // compact mode 6
+    if let Some(value6) = dict.get("peers6") {
+        if let Some(bytes) = value6.as_string() {
+            for chunk in bytes.chunks_exact(18) {
+                let ip = format!(
+                    "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
+                    chunk[0], chunk[1], chunk[2], chunk[3],
+                    chunk[4], chunk[5], chunk[6], chunk[7],
+                    chunk[8], chunk[9], chunk[10], chunk[11],
+                    chunk[12], chunk[13], chunk[14], chunk[15],
+                );
+                let port = ((chunk[16] as u16) << 8) | chunk[17] as u16;
+                peers.push(PeerInfo::new(None, ip, port));
+            }
+            return Ok(peers);
+        }
+    }
+
+    // non-compact mode
+    if let Some(value) = dict.get("peers") {
+        if let Some(list) = value.as_list() {
+            for peer in list {
+                peers.push(PeerInfo::from_bencode(&peer)?);
+            }
+        }
+    }
+
+    Ok(peers)
+}
+
+fn percent_encode(bytes: &[u8]) -> String {
+    bytes.iter()
+        .map(|b| format!("%{:02x}", b))
+        .collect()
 }

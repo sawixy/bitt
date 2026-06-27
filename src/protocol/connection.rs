@@ -38,7 +38,12 @@ impl Connection for TcpConnection {
             format!("{}:{}", self.address, self.port)
         };
 
-        self.stream = Some(TcpStream::connect(ip.as_str()).await?);
+        self.stream = Some(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                TcpStream::connect(ip.as_str())
+            ).await??
+        );
 
         Ok(())
     }

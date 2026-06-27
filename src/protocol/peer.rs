@@ -1,13 +1,13 @@
 use anyhow::anyhow;
+use eframe::egui::Key::A;
 
 use super::connection::Connection;
 use super::file::TorrentFile;
 use super::peerinfo::PeerInfo;
 
-use std::any;
 use std::sync::Arc;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum PeerMessageType {
     Choke,
     Unchoke,
@@ -52,7 +52,7 @@ pub struct Peer<C: Connection> {
 impl<C: Connection> Peer<C> {
     pub fn new(conn: C, info: PeerInfo, peer_info: PeerInfo, file: Arc<TorrentFile>) -> Self {
         Self {
-            conn,
+            conn: conn,
             choking: true,
             interested: false,
             peer_choking: true,
@@ -71,11 +71,11 @@ impl<C: Connection> Peer<C> {
         self.peer_info.clone()
     }
     
-    pub fn choking(&self) -> bool {
+    pub fn get_choking(&self) -> bool {
         self.choking
     }
     
-    pub fn interested(&self) -> bool {
+    pub fn get_interested(&self) -> bool {
         self.interested
     }
     
@@ -111,7 +111,7 @@ impl<C: Connection> Peer<C> {
         let mut handshake: Vec<u8> = Vec::new();
         handshake.push(19);
         
-        handshake.extend_from_slice(b"BitTorrent Protocol");
+        handshake.extend_from_slice(b"BitTorrent protocol");
 
         // reserved
         handshake.extend_from_slice(&[0u8; 8]);
@@ -122,6 +122,8 @@ impl<C: Connection> Peer<C> {
         // peerinfo
         if let Some(id) = self.info.get_id() {
             id.iter().for_each(|&b| handshake.push(b));
+        } else {
+            handshake.extend_from_slice(b"-qB4670-M5MQ6hKK8_5V");
         }
 
         self.conn.send(handshake.as_slice()).await?;
@@ -129,18 +131,22 @@ impl<C: Connection> Peer<C> {
         Ok(())
     }
 
-    pub async fn recv_handshake(&mut self, file: TorrentFile) -> Result<(), Box<dyn std::error::Error>> {
-        let raw: Vec<u8> = self.conn.receive().await?;
-        if raw[0] != 19 || &raw[1..20] != b"BitTorrent Protocol" {
+    pub async fn recv_handshake(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let raw = self.conn.read_exact(68).await?;
+        println!("{:?}", raw);
+        if raw[0] != 19 || &raw[1..20] != b"BitTorrent protocol" {
             return Err(anyhow!("Invalid protocol").into());
         }
 
-        let info_hash = &raw[21..41];
-        if info_hash != self.file.get_info_hash().as_slice() {
-            return Err(anyhow!("Info hash doesnt match").into())
+        let info_hash = raw[28..48].to_vec();
+        let my_info_hash = self.file.get_info_hash();
+        for i in 0..20usize {
+            if info_hash[i] != my_info_hash[i] {
+                return Err(anyhow!("Info hash doesnt match").into())
+            }
         }
 
-        // peer id skipped (i dont care about it)
+        // peer id skipped (i dont care about it, or am i?)
 
         Ok(())
     }
@@ -178,6 +184,7 @@ impl<C: Connection> Peer<C> {
     pub async fn recv_message(&mut self) -> Result<PeerMessage, Box<dyn std::error::Error>> {
         let length_bytes = self.conn.read_exact(4).await?;
         let length = u32::from_be_bytes([length_bytes[0], length_bytes[1], length_bytes[2], length_bytes[3]]) as usize;
+        println!("Length: {}", length);
         
         if length == 0 {
             return Ok(PeerMessage {
@@ -187,7 +194,9 @@ impl<C: Connection> Peer<C> {
         }
         
         let body = self.conn.read_exact(length).await?;
-        
+
+        println!("Body: {:?}", body);
+
         let msg_type = match body[0] {
             0 => PeerMessageType::Choke,
             1 => PeerMessageType::Unchoke,

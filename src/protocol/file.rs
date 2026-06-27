@@ -18,7 +18,7 @@ pub struct TorrentFile {
     pub info: HashMap<String, Entry>, // The "info" dictionary for V1 and V2
     pub piece_length: u64,
     pub pieces: Vec<[u8; 20]>,        // 20 bytes for each piece (V1)
-    pub info_hash: Vec<u8>,           // 20 bytes for V1 (SHA-1)
+    info_hash: Vec<u8>,           // 20 bytes for V1 (SHA-1)
     pub name: String,
     pub comment: Option<String>,
     pub created_by: Option<String>,

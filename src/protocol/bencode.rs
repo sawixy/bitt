@@ -182,9 +182,13 @@ impl Bencode {
             },
             Entry::Dict(dict) => {
                 let mut res = vec![b'd'];
-                for (key, value) in dict {
-                    Self::format_block(Entry::String(key.into_bytes())).iter().for_each(|b| { res.push(*b); });
-                    Self::format_block(value).iter().for_each(|b| { res.push(*b); });
+
+                let mut keys: Vec<&String> = dict.keys().collect();
+                keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+
+                for key in keys {
+                    Self::format_block(Entry::String(key.clone().into_bytes())).iter().for_each(|b| { res.push(*b); });
+                    Self::format_block(dict.get(key).unwrap_or(&Entry::String(b"null".to_vec())).clone()).iter().for_each(|b| { res.push(*b); });
                 }
                 res.push(b'e');
                 return res;

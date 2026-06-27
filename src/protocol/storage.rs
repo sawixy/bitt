@@ -1,14 +1,14 @@
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, AsyncReadExt, SeekFrom};
 use tokio::fs::{File, OpenOptions};
 use tokio::sync::Mutex as TokioMutex;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::path::Path;
 use super::bitfield::BitField;
 
-pub trait Storage: Clone {
+pub trait Storage: Clone + Send {
     fn get_bitfield(&self) -> BitField;
     async fn get_piece(&self, index: usize) -> Vec<u8>;
-    async fn set_piece(&mut self, index: usize, piece: Vec<u8>);
+    fn set_piece(&mut self, index: usize, piece: Vec<u8>) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Clone)]

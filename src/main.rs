@@ -1,7 +1,5 @@
 mod protocol;
 mod client;
-use crate::client::app::render;
-use crate::protocol::connection::TcpConnection;
 use protocol::session::Session;
 use protocol::file::TorrentFile;
 use protocol::bencode::Bencode;
@@ -21,6 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.piece_count()
     ).await?;
     
-    let mut session = Session::new(file, storage);
+    let session = Session::new(file, storage);
+    println!("info_hash: {:?}", session.get_file().get_info_hash());
+    session.discover().await?;
+    session.download().await?;
+
     Ok(())
 }
